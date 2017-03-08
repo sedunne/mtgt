@@ -1,0 +1,71 @@
+require 'plist'
+require 'securerandom'
+
+file = File.open(ARGV[0]) { |f| Plist::parse_xml(f) }
+plist = {}
+file.each { |x,y| plist[x] = y }
+
+## convert the data -> StringIO stuff to plain strings
+## there's apparently some invalid UTF-8 chars in the data, so handle that too
+plist.each do |x,y|
+  if y.class == StringIO
+    plist[x] = y.string.encode('UTF-8', :invalid=>:replace, :replace=>"?")
+  end
+end
+
+## convert color strings to their 0-1 rgb values as arrays
+plist.each do |x,y|
+  if y =~ /^bplist/
+    plist[x] = y.scan(/[01]\.?\d*\s[01]\.?\d*\s[01]\.?\d*/)[0].split(' ')
+  end
+end
+
+## convert the 0-1 rgb values to 0-255
+plist.each do |x,y|
+  if y.class == Array
+    y.map! { |x| (x.to_f * 255).to_i }
+  end
+end
+
+## convert the color arrays to strings for dconf
+plist.each do |x,y|
+  if y.class == Array
+    plist[x] = "rgb(#{y.join(',')})"
+  end
+end
+
+## get the list of profiles and add the converted one to it
+profiles = []
+profiles = `dconf read /org/gnome/terminal/legacy/profiles:/list`.
+    gsub(/[\[\]]/, '').gsub(/\s/, '').split(',')
+uuid = SecureRandom.uuid
+profiles.push("'#{uuid}'")
+
+## build the array for the gnome-terminal pallet in the order it expects
+pallet = [ plist['ANSIBlackColor'], plist['ANSIRedColor'],
+           plist['ANSIGreenColor'], plist['ANSIYellowColor'],
+           plist['ANSIBlueColor'], plist['ANSIMagentaColor'],
+           plist['ANSICyanColor'], plist['ANSIWhiteColor'],
+           plist['ANSIBrightBlackColor'], plist['ANSIBrightRedColor'],
+           plist['ANSIBrightGreenColor'], plist['ANSIBrightYellowColor'],
+           plist['ANSIBrightBlueColor'], plist['ANSIBrightMagentaColor'],
+           plist['ANSIBrightCyanColor'], plist['ANSIBrightWhiteColor'] ]
+
+## print the dconf file
+puts <<-EOT
+[org/gnome/terminal/legacy/profiles:]
+list=[#{profiles.join(', ')}]
+
+EOT
+puts <<-EOT
+[org/gnome/terminal/legacy/profiles:/:#{uuid}]
+visible-name='#{plist['name']}'
+use-theme-colors=false
+use-theme-background=false
+use-theme-transparency=false
+bold-color-same-as-fg=false
+bold-color='#{plist['TextBoldColor']}'
+foreground-color='#{plist['TextColor']}'
+background-color='#{plist['BackgroundColor']}'
+pallet=['#{pallet.join("', '")}']
+EOT
